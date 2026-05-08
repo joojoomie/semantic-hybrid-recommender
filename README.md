@@ -125,6 +125,24 @@ Collaborative embeddings require user-item interactions to become meaningful. Lo
 
 The notebook includes a long-tail analysis that compares Recall@10 on head and tail test items.
 
+## Controlled Ablations
+
+The ablation runner provides a small, repeatable way to test whether differences between Two-Tower, Mini-DLRM, and Hybrid Mini-DLRM + Semantic hold across seeds and basic training settings. It sweeps only existing model hyperparameters such as seed, epochs, learning rate, embedding dimension, and train negative ratio; it does not add new architectures.
+
+Quick mode is the default and intentionally caps the sweep to a few configs:
+
+```bash
+python scripts/run_ablation.py --quick
+```
+
+Full grid mode is available for later local runs, but should be used deliberately:
+
+```bash
+python scripts/run_ablation.py --full
+```
+
+The runner writes overall metrics, head/tail metrics, and mean/std summaries under `results/`, which is ignored by git.
+
 ## Future Work
 
 - hard negative mining
