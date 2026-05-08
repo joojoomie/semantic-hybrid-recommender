@@ -125,6 +125,25 @@ Collaborative embeddings require user-item interactions to become meaningful. Lo
 
 The notebook includes a long-tail analysis that compares Recall@10 on head and tail test items.
 
+## Experiment Findings
+
+The completed real-data pass uses an Amazon Reviews 2023 Movies_and_TV subset with 832 users, 2,215 items, 7,356 positive interactions, and 0.9960 sparsity. This is still a sampled-candidate ranking experiment, but it is sparse enough to expose a meaningful difference between purely collaborative item IDs and product-text semantic priors.
+
+The first tiny dense run used roughly 47 items. In that setting, semantic embeddings did not help because the candidate universe was small and collaborative repetition was strong enough for ID-based models to explain most of the ranking signal.
+
+In the larger sparse long-tail run, Hybrid Mini-DLRM + Semantic improved over Mini-DLRM overall. The semantic model also improved tail-item generalization relative to Mini-DLRM, which supports the core hypothesis: pretrained product-text representations become more useful when item interactions are sparse but title/category/description metadata is still informative.
+
+The long-tail split also showed that DLRM-style feature interaction models can become strongly head-biased. Mini-DLRM performed well on head items, but its tail Recall@10 dropped sharply. Adding frozen MiniLM item embeddings improved tail Recall@10 and NDCG@10 relative to Mini-DLRM, though long-tail performance remains much harder than head-item ranking.
+
+The controlled multi-seed ablation at `epochs=5`, `lr=1e-3`, `emb_dim=32`, and `train_negatives=4` showed Hybrid Mini-DLRM + Semantic with Recall@10 mean near 0.2472 versus Mini-DLRM near 0.2264. Hybrid also had lower Recall@10 variance across seeds, suggesting semantic priors can improve both quality and stability in this sparse regime.
+
+Key takeaways:
+
+- semantic embeddings help more in sparse long-tail settings than in tiny dense item universes
+- DLRM-style interaction models can be strongly head-biased
+- semantic priors can improve stability and generalization across seeds
+- recommendation quality depends heavily on dataset regime, metadata coverage, negative sampling, and feature richness
+
 ## Controlled Ablations
 
 The ablation runner provides a small, repeatable way to test whether differences between Two-Tower, Mini-DLRM, and Hybrid Mini-DLRM + Semantic hold across seeds and basic training settings. It sweeps only existing model hyperparameters such as seed, epochs, learning rate, embedding dimension, and train negative ratio; it does not add new architectures.
@@ -142,6 +161,13 @@ python scripts/run_ablation.py --full
 ```
 
 The runner writes overall metrics, head/tail metrics, and mean/std summaries under `results/`, which is ignored by git.
+
+## References And Resources
+
+- [Amazon Reviews 2023 dataset](https://huggingface.co/datasets/McAuley-Lab/Amazon-Reviews-2023), McAuley Lab
+- DLRM: deep learning recommendation models with sparse embeddings, dense features, and feature interactions
+- Semantic embedding models: MiniLM, e5, and BGE sentence embedding families
+- Long-tail recommendation: methods for improving ranking quality when item feedback is sparse and popularity is skewed
 
 ## Future Work
 
