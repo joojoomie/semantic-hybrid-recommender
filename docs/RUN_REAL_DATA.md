@@ -107,10 +107,108 @@ data/raw/movies_tv_metadata_subset.jsonl
 
 The notebook is configured to use these paths when present and falls back to synthetic demo data if they are absent.
 
+## Mac Studio / Apple Silicon MPS
+
+The training utilities use PyTorch device selection in this order:
+
+```text
+mps -> cuda -> cpu
+```
+
+Run the MPS smoke check before longer local experiments:
+
+```bash
+python scripts/smoke_mps.py
+```
+
+The script prints the PyTorch version, MPS availability, selected device, and runs one tiny forward/backward pass. If MPS is unavailable, the project falls back to CUDA or CPU unless you explicitly request `--device mps`.
+
+For controlled runs, `scripts/run_ablation.py` supports:
+
+```bash
+--device auto        # default; prefers MPS on Apple Silicon
+--device mps         # fail fast if MPS is unavailable
+--batch-size 2048    # tune for local memory
+--eval-user-limit 200
+```
+
+`--eval-user-limit` limits validation candidates during epoch logging only. Final test evaluation still uses the full test candidate set.
+
+## Larger Local Subset Scales
+
+All recommended scales keep:
+
+```text
+min_user_interactions = 5
+min_item_interactions = 2
+selection_mode = long_tail
+```
+
+Small:
+
+```bash
+python scripts/build_real_subset.py \
+  --max-review-rows 1000000 \
+  --max-metadata-rows 1500000 \
+  --target-items 5000 \
+  --target-interactions 50000 \
+  --selection-mode long_tail \
+  --min-user-interactions 5 \
+  --min-item-interactions 2
+```
+
+Medium:
+
+```bash
+python scripts/build_real_subset.py \
+  --max-review-rows 2000000 \
+  --max-metadata-rows 2500000 \
+  --target-items 10000 \
+  --target-interactions 100000 \
+  --selection-mode long_tail \
+  --min-user-interactions 5 \
+  --min-item-interactions 2
+```
+
+Large local:
+
+```bash
+python scripts/build_real_subset.py \
+  --max-review-rows 4000000 \
+  --max-metadata-rows 5000000 \
+  --target-items 20000 \
+  --target-interactions 250000 \
+  --selection-mode long_tail \
+  --min-user-interactions 5 \
+  --min-item-interactions 2
+```
+
+Start larger local model runs conservatively:
+
+```bash
+python scripts/run_ablation.py \
+  --quick \
+  --models mini_dlrm,hybrid \
+  --seeds 42 \
+  --epochs 3 \
+  --learning-rates 0.001 \
+  --embedding-dims 32 \
+  --train-negatives 8 \
+  --eval-negatives 99 \
+  --batch-size 2048 \
+  --eval-user-limit 200 \
+  --device auto
+```
+
+Use final full evaluation only after the smoke run completes. Do not start the large local subset automatically unless you are ready for a longer download, embedding generation, and training pass.
+
 ## Full Run Checklist
 
 1. Put local data files somewhere ignored by git, usually `data/raw/`.
 2. Run the smoke script and confirm `user_id`, `item_id`, `rating`, and `timestamp` are normalized correctly.
 3. Set `REVIEWS_PATH` and optional `METADATA_PATH` in the notebook.
 4. Start with `EPOCHS = 1` and a small `MAX_INTERACTIONS` for a fast smoke run.
-5. Increase `EPOCHS`, `MAX_INTERACTIONS`, and semantic model quality after the small run succeeds.
+5. Run `python scripts/smoke_mps.py` and confirm the selected device.
+6. Start larger runs with `EPOCHS = 3`, `TRAIN_NEGATIVES = 8`, `EVAL_NEGATIVES = 99`, and a configurable batch size.
+7. Use a validation subset during training if full validation is slow, then run full final evaluation at the end.
+8. Increase `EPOCHS`, `MAX_INTERACTIONS`, and semantic model quality after the smaller run succeeds.

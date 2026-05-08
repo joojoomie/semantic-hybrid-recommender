@@ -108,6 +108,18 @@ def build_configs(args: argparse.Namespace) -> list[AblationConfig]:
     return configs
 
 
+def limit_eval_candidates(
+    candidates: list[dict[str, object]],
+    limit: int | None,
+    seed: int,
+) -> list[dict[str, object]]:
+    if limit is None or limit <= 0 or len(candidates) <= limit:
+        return candidates
+    rng = np.random.default_rng(seed)
+    indices = np.sort(rng.choice(len(candidates), size=limit, replace=False))
+    return [candidates[int(idx)] for idx in indices]
+
+
 def prepare_data(args: argparse.Namespace) -> PreparedData:
     reviews_path = resolve_path(args.reviews)
     metadata_path = resolve_path(args.metadata)
@@ -212,6 +224,9 @@ def add_metadata_columns(frame: pd.DataFrame, args: argparse.Namespace, config: 
         "semantic_model": args.semantic_model,
         **data.stats,
         **asdict(config),
+        "device": getattr(args, "selected_device", args.device),
+        "device_request": args.device,
+        "eval_user_limit": args.eval_user_limit if args.eval_user_limit else "full",
     }.items():
         enriched[key] = value
     return enriched
@@ -237,7 +252,8 @@ def run_one_config(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     print(f"Running config: {config}")
     seed_everything(config.seed)
-    device = get_device()
+    device = get_device(args.device)
+    args.selected_device = str(device)
 
     train_samples = build_training_samples(
         data.train_df,
@@ -260,6 +276,11 @@ def run_one_config(
         num_negatives=args.eval_negatives,
         seed=config.seed + 2,
     )
+    val_candidates_for_training = limit_eval_candidates(
+        val_candidates,
+        args.eval_user_limit,
+        seed=config.seed + 3,
+    )
 
     results: dict[str, dict[str, float]] = {}
     scorers: dict[str, object] = {}
@@ -274,7 +295,7 @@ def run_one_config(
         model = train_model(
             model,
             train_samples,
-            eval_candidates=val_candidates,
+            eval_candidates=val_candidates_for_training,
             epochs=config.epochs,
             batch_size=args.batch_size,
             lr=config.lr,
@@ -296,7 +317,7 @@ def run_one_config(
         model = train_model(
             model,
             train_samples,
-            eval_candidates=val_candidates,
+            eval_candidates=val_candidates_for_training,
             item_features=data.item_features,
             epochs=config.epochs,
             batch_size=args.batch_size,
@@ -329,7 +350,7 @@ def run_one_config(
         model = train_model(
             model,
             train_samples,
-            eval_candidates=val_candidates,
+            eval_candidates=val_candidates_for_training,
             item_features=data.item_features,
             epochs=config.epochs,
             batch_size=args.batch_size,
@@ -399,6 +420,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-user-interactions", type=int, default=5)
     parser.add_argument("--min-item-interactions", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=1024)
+    parser.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "mps", "cuda", "cpu"],
+        help="Training device. auto prefers Apple Silicon MPS, then CUDA, then CPU.",
+    )
+    parser.add_argument(
+        "--eval-user-limit",
+        type=int,
+        default=None,
+        help="Optional validation candidate limit during training. Final test evaluation remains full.",
+    )
     parser.add_argument("--semantic-model", default="sentence-transformers/all-MiniLM-L6-v2")
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--k", type=int, default=10)
