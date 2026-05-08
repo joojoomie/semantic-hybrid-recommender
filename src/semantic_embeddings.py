@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -100,8 +101,22 @@ def load_or_create_semantic_embeddings(
 ) -> np.ndarray:
     """Load cached semantic embeddings or create and save them."""
     cache_path = Path(cache_path)
+    meta_path = cache_path.with_suffix(cache_path.suffix + ".meta.json")
     if cache_path.exists():
-        return np.load(cache_path).astype(np.float32)
+        cached = np.load(cache_path).astype(np.float32)
+        cache_meta = {}
+        if meta_path.exists():
+            cache_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        cache_model = cache_meta.get("model_name")
+        model_matches = cache_model == model_name
+        legacy_offline_cache = cache_model is None and model_name.lower() in {"tfidf-svd", "tfidf_svd", "offline"}
+        if cached.shape[0] == len(texts) and (model_matches or legacy_offline_cache):
+            return cached
+        print(
+            f"Cached embeddings do not match the current request "
+            f"(rows={cached.shape[0]} expected={len(texts)}, model={cache_model!r} expected={model_name!r}). "
+            "Regenerating cache."
+        )
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     if model_name.lower() in {"tfidf-svd", "tfidf_svd", "offline"}:
@@ -114,4 +129,15 @@ def load_or_create_semantic_embeddings(
             print(f"SentenceTransformer unavailable or failed ({exc}). Falling back to TF-IDF + SVD.")
             embeddings = generate_tfidf_svd_embeddings(texts, n_components=fallback_components)
     np.save(cache_path, embeddings)
+    meta_path.write_text(
+        json.dumps(
+            {
+                "model_name": model_name,
+                "num_texts": len(texts),
+                "embedding_dim": int(embeddings.shape[1]),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return embeddings.astype(np.float32)

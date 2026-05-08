@@ -83,6 +83,26 @@ python scripts/smoke_real_data.py --reviews data/raw/your_reviews.jsonl --rows 5
 
 The script prints raw review columns, normalized review columns, normalized metadata columns when provided, and a few normalized rows after applying the implicit-positive filter.
 
+## Build A Small Movies_and_TV Subset
+
+For a first local real-data pass, you can stream a compact 5-core-preserving subset from the official Amazon Reviews 2023 Movies_and_TV files:
+
+```bash
+python scripts/build_real_subset.py \
+  --max-review-rows 500000 \
+  --max-metadata-rows 1000000 \
+  --max-output-reviews 5000
+```
+
+This writes ignored local files:
+
+```text
+data/raw/movies_tv_reviews_subset.jsonl
+data/raw/movies_tv_metadata_subset.jsonl
+```
+
+The notebook is configured to use these paths when present and falls back to synthetic demo data if they are absent.
+
 ## Full Run Checklist
 
 1. Put local data files somewhere ignored by git, usually `data/raw/`.

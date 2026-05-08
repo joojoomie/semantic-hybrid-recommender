@@ -15,7 +15,10 @@ from src.data import normalize_columns
 
 def read_sample(path: str | Path, rows: int) -> pd.DataFrame:
     path = Path(path)
-    suffix = path.suffix.lower()
+    suffixes = [suffix.lower() for suffix in path.suffixes]
+    suffix = suffixes[-1] if suffixes else ""
+    if suffix == ".gz" and len(suffixes) >= 2:
+        suffix = suffixes[-2]
     if suffix == ".csv":
         return pd.read_csv(path, nrows=rows)
     if suffix in {".jsonl", ".ndjson"}:
