@@ -190,6 +190,45 @@ Increasing negatives from 4 to 8/12/16 improves ranking quality. Hybrid remains 
 
 Final tuning takeaway: semantic embeddings improve sparse recommendation not only by raising mean ranking quality, but also by reducing seed sensitivity and stabilizing optimization under harder negative sampling.
 
+## Cold-start Boost Reranking
+
+The project also includes an optional post-ranking exploration heuristic for cold-start and long-tail analysis. This is not a new model and does not retrain the recommender. It adjusts already-computed Hybrid scores with a small popularity-based boost:
+
+```text
+final_score = model_score + alpha * cold_start_boost
+```
+
+Two modes are supported: `threshold`, which boosts items with train interaction counts at or below a threshold, and `inverse_popularity`, which gives larger boosts to lower-popularity items. The goal is to simulate exploration traffic allocation for sparse or new items using train-set popularity as a proxy.
+
+This analysis should be interpreted as an accuracy versus exposure tradeoff. A boost can increase tail exposure without proving better relevance, so the runner reports both ranking metrics and exposure diagnostics:
+
+```text
+Recall@10, NDCG@10, head/tail Recall@10, TailExposure@10, AvgTrainPopularity@10
+```
+
+Example smoke commands:
+
+```bash
+python scripts/run_ablation.py \
+  --quick \
+  --models hybrid \
+  --epochs 1 \
+  --train-negatives 2 \
+  --cold-start-boost-mode threshold \
+  --cold-start-boost-alpha 0.02,0.05 \
+  --cold-start-threshold 2
+```
+
+```bash
+python scripts/run_ablation.py \
+  --quick \
+  --models hybrid \
+  --epochs 1 \
+  --train-negatives 2 \
+  --cold-start-boost-mode inverse_popularity \
+  --cold-start-boost-alpha 0.02,0.05
+```
+
 ## Final Findings
 
 The final experimental setting is a sparse Amazon Reviews 2023 `Movies_and_TV` subset with 832 users, 2,215 items, 7,356 interactions, and 0.9960 sparsity. Evaluation uses leave-last-out ranking with 1 held-out positive and 99 sampled negatives per user. Because each test case has a single positive item, `HitRate@10` and `Recall@10` are effectively identical in this setup.

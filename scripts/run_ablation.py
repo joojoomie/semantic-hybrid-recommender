@@ -27,9 +27,10 @@ from src.data import (
     normalize_columns,
     temporal_split,
 )
-from src.metrics import evaluate_leave_one_out, metrics_to_frame
+from src.metrics import evaluate_leave_one_out
 from src.models import HybridDLRM, MiniDLRM, TwoTower
 from src.negative_sampling import build_eval_candidates, build_training_samples, build_user_positive_items
+from src.rerank import compute_item_train_counts, evaluate_ranking_exposure, make_cold_start_boost_scorer
 from src.semantic_embeddings import build_item_text, load_or_create_semantic_embeddings
 from src.train import ItemFeatureStore, make_popularity_scorer, make_torch_scorer, train_model
 from src.utils import get_device, seed_everything
@@ -108,6 +109,12 @@ def build_configs(args: argparse.Namespace) -> list[AblationConfig]:
     return configs
 
 
+def parse_boost_alphas(args: argparse.Namespace) -> list[float]:
+    if args.cold_start_boost_mode == "none":
+        return []
+    return parse_float_list(args.cold_start_boost_alpha)
+
+
 def limit_eval_candidates(
     candidates: list[dict[str, object]],
     limit: int | None,
@@ -118,6 +125,14 @@ def limit_eval_candidates(
     rng = np.random.default_rng(seed)
     indices = np.sort(rng.choice(len(candidates), size=limit, replace=False))
     return [candidates[int(idx)] for idx in indices]
+
+
+def build_head_tail_items(train_df: pd.DataFrame, num_items: int) -> tuple[set[int], set[int]]:
+    popularity = train_df["item_idx"].value_counts()
+    head_cutoff = max(1, int(np.ceil(num_items * 0.2)))
+    head_items = set(popularity.sort_values(ascending=False).head(head_cutoff).index.astype(int))
+    tail_items = set(range(num_items)) - head_items
+    return head_items, tail_items
 
 
 def prepare_data(args: argparse.Namespace) -> PreparedData:
@@ -186,23 +201,22 @@ def prepare_data(args: argparse.Namespace) -> PreparedData:
 def evaluate_long_tail(
     scorer_by_model: dict[str, object],
     test_candidates: list[dict[str, object]],
-    train_df: pd.DataFrame,
-    num_items: int,
+    head_items: set[int],
+    tail_items: set[int],
+    item_train_counts: np.ndarray,
     k: int,
+    scorer_metadata: dict[str, dict[str, object]] | None = None,
 ) -> pd.DataFrame:
     def filter_candidates_by_items(candidates: list[dict[str, object]], allowed_items: set[int]) -> list[dict[str, object]]:
         return [row for row in candidates if int(row["true_item"]) in allowed_items]
 
-    popularity = train_df["item_idx"].value_counts()
-    head_cutoff = max(1, int(np.ceil(num_items * 0.2)))
-    head_items = set(popularity.sort_values(ascending=False).head(head_cutoff).index.astype(int))
-    tail_items = set(range(num_items)) - head_items
-
+    scorer_metadata = scorer_metadata or {}
     rows = []
     for model_name, scorer in scorer_by_model.items():
         for group_name, item_group in (("head", head_items), ("tail", tail_items)):
             group_candidates = filter_candidates_by_items(test_candidates, item_group)
             metrics = evaluate_leave_one_out(None, group_candidates, k=k, scorer=scorer)
+            exposure = evaluate_ranking_exposure(scorer, group_candidates, item_train_counts, tail_items, k=k)
             rows.append(
                 {
                     "Model": model_name,
@@ -210,6 +224,8 @@ def evaluate_long_tail(
                     "Test Users": len(group_candidates),
                     "Test Items": len({int(row["true_item"]) for row in group_candidates}),
                     **metrics,
+                    **exposure,
+                    **scorer_metadata.get(model_name, {}),
                 }
             )
     return pd.DataFrame(rows)
@@ -227,14 +243,26 @@ def add_metadata_columns(frame: pd.DataFrame, args: argparse.Namespace, config: 
         "device": getattr(args, "selected_device", args.device),
         "device_request": args.device,
         "eval_user_limit": args.eval_user_limit if args.eval_user_limit else "full",
+        "cold_start_threshold": args.cold_start_threshold,
     }.items():
-        enriched[key] = value
+        if key not in enriched.columns:
+            enriched[key] = value
     return enriched
 
 
 def summarize_metrics(df: pd.DataFrame, metric_cols: list[str], extra_group_cols: list[str] | None = None) -> pd.DataFrame:
     extra_group_cols = extra_group_cols or []
-    group_cols = ["Model", *extra_group_cols, "epochs", "lr", "emb_dim", "train_negatives"]
+    group_cols = [
+        "Model",
+        *extra_group_cols,
+        "epochs",
+        "lr",
+        "emb_dim",
+        "train_negatives",
+        "cold_start_boost_mode",
+        "cold_start_boost_alpha",
+        "cold_start_threshold",
+    ]
     present_group_cols = [col for col in group_cols if col in df.columns]
     summary = df.groupby(present_group_cols, dropna=False)[metric_cols].agg(["mean", "std"]).reset_index()
     summary.columns = [
@@ -242,6 +270,29 @@ def summarize_metrics(df: pd.DataFrame, metric_cols: list[str], extra_group_cols
         for column in summary.columns
     ]
     return summary.fillna(0.0)
+
+
+def evaluate_scorer_row(
+    model_name: str,
+    scorer: object,
+    test_candidates: list[dict[str, object]],
+    item_train_counts: np.ndarray,
+    tail_items: set[int],
+    k: int,
+    metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    metadata = metadata or {}
+    metrics = evaluate_leave_one_out(None, test_candidates, k=k, scorer=scorer)
+    exposure = evaluate_ranking_exposure(scorer, test_candidates, item_train_counts, tail_items, k=k)
+    return {"Model": model_name, **metrics, **exposure, **metadata}
+
+
+def base_scorer_metadata() -> dict[str, object]:
+    return {"cold_start_boost_mode": "none", "cold_start_boost_alpha": 0.0}
+
+
+def boosted_scorer_name(mode: str, alpha: float) -> str:
+    return f"Hybrid + Cold-start Boost {mode} alpha={alpha:g}"
 
 
 def run_one_config(
@@ -281,14 +332,28 @@ def run_one_config(
         args.eval_user_limit,
         seed=config.seed + 3,
     )
+    item_train_counts = compute_item_train_counts(data.train_df, data.num_items)
+    head_items, tail_items = build_head_tail_items(data.train_df, data.num_items)
 
-    results: dict[str, dict[str, float]] = {}
+    result_rows: list[dict[str, object]] = []
     scorers: dict[str, object] = {}
+    scorer_metadata: dict[str, dict[str, object]] = {}
 
     if "popularity" in models:
         scorer = make_popularity_scorer(data.train_df, data.num_items)
         scorers["Popularity"] = scorer
-        results["Popularity"] = evaluate_leave_one_out(None, test_candidates, k=args.k, scorer=scorer)
+        scorer_metadata["Popularity"] = base_scorer_metadata()
+        result_rows.append(
+            evaluate_scorer_row(
+                "Popularity",
+                scorer,
+                test_candidates,
+                item_train_counts,
+                tail_items,
+                args.k,
+                scorer_metadata["Popularity"],
+            )
+        )
 
     if "two_tower" in models:
         model = TwoTower(data.num_users, data.num_items, emb_dim=config.emb_dim)
@@ -304,7 +369,18 @@ def run_one_config(
         )
         scorer = make_torch_scorer(model, device=device)
         scorers["Two-Tower"] = scorer
-        results["Two-Tower"] = evaluate_leave_one_out(None, test_candidates, k=args.k, scorer=scorer)
+        scorer_metadata["Two-Tower"] = base_scorer_metadata()
+        result_rows.append(
+            evaluate_scorer_row(
+                "Two-Tower",
+                scorer,
+                test_candidates,
+                item_train_counts,
+                tail_items,
+                args.k,
+                scorer_metadata["Two-Tower"],
+            )
+        )
 
     if "mini_dlrm" in models:
         model = MiniDLRM(
@@ -327,7 +403,18 @@ def run_one_config(
         )
         scorer = make_torch_scorer(model, item_features=data.item_features, device=device)
         scorers["Mini-DLRM"] = scorer
-        results["Mini-DLRM"] = evaluate_leave_one_out(None, test_candidates, k=args.k, scorer=scorer)
+        scorer_metadata["Mini-DLRM"] = base_scorer_metadata()
+        result_rows.append(
+            evaluate_scorer_row(
+                "Mini-DLRM",
+                scorer,
+                test_candidates,
+                item_train_counts,
+                tail_items,
+                args.k,
+                scorer_metadata["Mini-DLRM"],
+            )
+        )
 
     if "hybrid" in models:
         texts = build_item_text(data.metadata, data.item_mapping)
@@ -360,11 +447,56 @@ def run_one_config(
         )
         scorer = make_torch_scorer(model, item_features=data.item_features, device=device)
         scorers["Hybrid Mini-DLRM + Semantic"] = scorer
-        results["Hybrid Mini-DLRM + Semantic"] = evaluate_leave_one_out(None, test_candidates, k=args.k, scorer=scorer)
+        scorer_metadata["Hybrid Mini-DLRM + Semantic"] = base_scorer_metadata()
+        result_rows.append(
+            evaluate_scorer_row(
+                "Hybrid Mini-DLRM + Semantic",
+                scorer,
+                test_candidates,
+                item_train_counts,
+                tail_items,
+                args.k,
+                scorer_metadata["Hybrid Mini-DLRM + Semantic"],
+            )
+        )
 
-    overall = add_metadata_columns(metrics_to_frame(results), args, config, data)
+        for alpha in parse_boost_alphas(args):
+            boosted_name = boosted_scorer_name(args.cold_start_boost_mode, alpha)
+            boosted_scorer = make_cold_start_boost_scorer(
+                scorer,
+                item_train_counts,
+                alpha=alpha,
+                mode=args.cold_start_boost_mode,
+                threshold=args.cold_start_threshold,
+            )
+            scorers[boosted_name] = boosted_scorer
+            scorer_metadata[boosted_name] = {
+                "cold_start_boost_mode": args.cold_start_boost_mode,
+                "cold_start_boost_alpha": alpha,
+            }
+            result_rows.append(
+                evaluate_scorer_row(
+                    boosted_name,
+                    boosted_scorer,
+                    test_candidates,
+                    item_train_counts,
+                    tail_items,
+                    args.k,
+                    scorer_metadata[boosted_name],
+                )
+            )
+
+    overall = add_metadata_columns(pd.DataFrame(result_rows), args, config, data)
     long_tail = add_metadata_columns(
-        evaluate_long_tail(scorers, test_candidates, data.train_df, data.num_items, args.k),
+        evaluate_long_tail(
+            scorers,
+            test_candidates,
+            head_items,
+            tail_items,
+            item_train_counts,
+            args.k,
+            scorer_metadata,
+        ),
         args,
         config,
         data,
@@ -381,7 +513,13 @@ def write_outputs(args: argparse.Namespace, overall: pd.DataFrame, long_tail: pd
     overall_summary_path = results_dir / f"ablation_overall_summary_{stem}.csv"
     long_tail_summary_path = results_dir / f"ablation_long_tail_summary_{stem}.csv"
 
-    metric_cols = [f"Recall@{args.k}", f"HitRate@{args.k}", f"NDCG@{args.k}"]
+    metric_cols = [
+        f"Recall@{args.k}",
+        f"HitRate@{args.k}",
+        f"NDCG@{args.k}",
+        f"TailExposure@{args.k}",
+        f"AvgTrainPopularity@{args.k}",
+    ]
     overall_summary = summarize_metrics(overall, metric_cols)
     long_tail_summary = summarize_metrics(long_tail, metric_cols, extra_group_cols=["Group"])
 
@@ -433,6 +571,23 @@ def parse_args() -> argparse.Namespace:
         help="Optional validation candidate limit during training. Final test evaluation remains full.",
     )
     parser.add_argument("--semantic-model", default="sentence-transformers/all-MiniLM-L6-v2")
+    parser.add_argument(
+        "--cold-start-boost-mode",
+        choices=["none", "threshold", "inverse_popularity"],
+        default="none",
+        help="Optional post-ranking cold-start boost. none keeps existing scoring unchanged.",
+    )
+    parser.add_argument(
+        "--cold-start-boost-alpha",
+        default="0.0",
+        help="Comma-separated boost strengths, used only when cold-start boost mode is not none.",
+    )
+    parser.add_argument(
+        "--cold-start-threshold",
+        type=int,
+        default=2,
+        help="Train interaction threshold for threshold-mode cold-start boost.",
+    )
     parser.add_argument("--data-seed", type=int, default=42)
     parser.add_argument("--k", type=int, default=10)
     return parser.parse_args()
