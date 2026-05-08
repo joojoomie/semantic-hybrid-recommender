@@ -83,15 +83,19 @@ python scripts/smoke_real_data.py --reviews data/raw/your_reviews.jsonl --rows 5
 
 The script prints raw review columns, normalized review columns, normalized metadata columns when provided, and a few normalized rows after applying the implicit-positive filter.
 
-## Build A Small Movies_and_TV Subset
+## Build A Sparse Long-tail Movies_and_TV Subset
 
-For a first local real-data pass, you can stream a compact 5-core-preserving subset from the official Amazon Reviews 2023 Movies_and_TV files:
+For a first sparse long-tail real-data pass, you can stream a compact subset from the official Amazon Reviews 2023 Movies_and_TV files. The builder keeps user/item core constraints but selects items across popularity buckets instead of only taking the most popular products:
 
 ```bash
 python scripts/build_real_subset.py \
   --max-review-rows 500000 \
   --max-metadata-rows 1000000 \
-  --max-output-reviews 5000
+  --target-items 2000 \
+  --target-interactions 50000 \
+  --selection-mode long_tail \
+  --min-user-interactions 5 \
+  --min-item-interactions 2
 ```
 
 This writes ignored local files:
@@ -108,5 +112,5 @@ The notebook is configured to use these paths when present and falls back to syn
 1. Put local data files somewhere ignored by git, usually `data/raw/`.
 2. Run the smoke script and confirm `user_id`, `item_id`, `rating`, and `timestamp` are normalized correctly.
 3. Set `REVIEWS_PATH` and optional `METADATA_PATH` in the notebook.
-4. Start with `NOTEBOOK_EPOCHS = 1` and a small `NOTEBOOK_MAX_INTERACTIONS`.
+4. Start with `EPOCHS = 1` and a small `MAX_INTERACTIONS` for a fast smoke run.
 5. Increase `EPOCHS`, `MAX_INTERACTIONS`, and semantic model quality after the small run succeeds.
