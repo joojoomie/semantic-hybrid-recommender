@@ -190,13 +190,66 @@ Increasing negatives from 4 to 8/12/16 improves ranking quality. Hybrid remains 
 
 Final tuning takeaway: semantic embeddings improve sparse recommendation not only by raising mean ranking quality, but also by reducing seed sensitivity and stabilizing optimization under harder negative sampling.
 
-## Insights
+## Final Findings
+
+The final experimental setting is a sparse Amazon Reviews 2023 `Movies_and_TV` subset with 832 users, 2,215 items, 7,356 interactions, and 0.9960 sparsity. Evaluation uses leave-last-out ranking with 1 held-out positive and 99 sampled negatives per user. Because each test case has a single positive item, `HitRate@10` and `Recall@10` are effectively identical in this setup.
+
+The project progressed through five stages:
+
+1. Collaborative baselines: popularity, Two-Tower, and Mini-DLRM established the ranking baseline. On the initial tiny 47-item dense subset, Two-Tower and Mini-DLRM were similar, and semantic priors had little room to help.
+2. Sparse long-tail regime: expanding to 2,215 items made tail-item behavior central. Hybrid semantic recommendation began outperforming purely collaborative models.
+3. Negative sampling: increasing train negatives from 4 to 8/12/16 consistently improved ranking quality, especially NDCG. Semantic hybrid models remained more stable across seeds under harder negative sampling.
+4. Embedding capacity: tuning embedding dimensions from 16 to 96 exposed a capacity/stability tradeoff. Larger dimensions increased capacity but could increase variance or over-parameterize sparse interactions.
+5. Semantic encoder comparison: MiniLM, BGE-small, and e5-small behaved differently. MiniLM was the strongest balanced/stable baseline, BGE-small achieved the strongest tuned Recall, and e5-small was weaker in this recommendation setting.
+
+Compact final benchmark:
+
+| Model | Best observed setting | Recall@10 | HitRate@10 | NDCG@10 |
+|---|---|---:|---:|---:|
+| Popularity | sparse long-tail baseline | 0.2139 | 0.2139 | 0.1136 |
+| Two-Tower | sparse long-tail baseline | 0.1094 | 0.1094 | 0.0479 |
+| Mini-DLRM | tuned negatives=16 | 0.2592 | 0.2592 | 0.1445 |
+| Hybrid MiniLM | epochs=5, emb_dim=32, negatives=12 | 0.2596 | 0.2596 | 0.1440 |
+| Hybrid BGE | epochs=8, emb_dim=64, negatives=12 | ~0.275 | ~0.275 | ~0.137 |
+
+Best balanced/stable configuration:
+
+```text
+Model: Hybrid Mini-DLRM + Semantic
+Semantic encoder: sentence-transformers/all-MiniLM-L6-v2
+epochs = 5
+lr = 1e-3
+emb_dim = 32
+train_negatives = 12
+```
+
+Best retrieval-oriented configuration:
+
+```text
+Model: Hybrid Mini-DLRM + Semantic
+Semantic encoder: BAAI/bge-small-en-v1.5
+epochs = 8
+lr = 1e-3
+emb_dim = 64
+train_negatives = 12
+Recall@10 mean ~= 0.275
+NDCG@10 mean ~= 0.137
+std ~= 0.012
+```
+
+The main conclusion is that semantic item embeddings become increasingly valuable under sparse long-tail recommendation settings. They improve tail-item discrimination, reduce seed sensitivity, and provide a stabilizing inductive bias when negative sampling becomes harder. The strongest general retrieval encoder is not automatically the best recommender semantic prior; alignment between semantic embedding geometry and recommender optimization matters.
+
+## Lessons Learned / Key Insights
 
 - Semantic embeddings help more in sparse long-tail settings than in tiny dense item universes.
 - DLRM-style interaction models can become strongly head-biased.
 - Frozen semantic priors can improve seed stability and generalization.
 - Harder negative sampling improves ranking quality, with `train_negatives=12` the best balanced hybrid setting observed.
+- Semantic encoder choice materially affects hybrid recommender performance.
+- Sparse recommendation has a real capacity/stability tradeoff; larger embeddings are not always better.
 - Recommendation quality depends heavily on dataset regime, metadata coverage, negative sampling, and feature richness.
+
+Most important insight: the project evolved from a simple "DLRM + semantic embeddings" implementation into a systematic analysis of semantic priors under sparse long-tail recommendation optimization.
 
 ## Evaluation Metrics
 
@@ -208,7 +261,17 @@ The experiments use leave-last-out sampled ranking and report:
 
 For leave-one-out ranking, Recall@K and HitRate@K are equivalent, but both are included for readability.
 
-## Future Work
+## Limitations And Future Work
+
+Limitations:
+
+- Evaluation uses sampled candidate ranking, not full-catalog retrieval.
+- The project does not include sequential user modeling.
+- The project does not include graph-based collaborative modeling.
+- The project does not separate retrieval and reranking stages.
+- Encoder-specific tuning was informative but not exhaustive.
+
+Future work:
 
 - Hard negative mining
 - Popularity-aware negative sampling
@@ -224,3 +287,4 @@ For leave-one-out ranking, Recall@K and HitRate@K are equivalent, but both are i
 - DLRM-style recommendation models with sparse embeddings, dense features, and feature interactions
 - Semantic embedding models: MiniLM, e5, and BGE
 - Long-tail recommendation research on sparse feedback and popularity skew
+- [Negative Sampling in Recommendation: A Survey and Future Directions](https://dl.acm.org/doi/10.1145/3793855), ACM Digital Library
