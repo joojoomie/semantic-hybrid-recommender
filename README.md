@@ -15,19 +15,19 @@ Real-data experiment: Amazon Reviews 2023 `Movies_and_TV` subset.
 | Positive interactions | 7,356 |
 | Sparsity | 0.9960 |
 
-| Model | Recall@10 | NDCG@10 |
-|---|---:|---:|
-| Mini-DLRM | 0.2188 | 0.1135 |
-| Hybrid Mini-DLRM + Semantic | 0.2404 | 0.1347 |
+Final tuned sampled-ranking benchmark:
 
-Controlled multi-seed ablation at `epochs=5`, `lr=1e-3`, `emb_dim=32`, `train_negatives=4`:
+| Model | Setting | Recall@10 | HitRate@10 | NDCG@10 |
+|---|---|---:|---:|---:|
+| Popularity | sparse long-tail baseline | 0.2139 | 0.2139 | 0.1136 |
+| Two-Tower | sparse long-tail baseline | 0.1094 | 0.1094 | 0.0479 |
+| Mini-DLRM | tuned negatives=16 | 0.2592 | 0.2592 | 0.1445 |
+| Hybrid MiniLM | epochs=5, emb_dim=32, negatives=12 | 0.2596 | 0.2596 | 0.1440 |
+| Hybrid BGE | epochs=8, emb_dim=64, negatives=12 | ~0.275 | ~0.275 | ~0.137 |
 
-| Model | Recall@10 mean | Recall@10 std |
-|---|---:|---:|
-| Mini-DLRM | 0.2264 | 0.0117 |
-| Hybrid Mini-DLRM + Semantic | 0.2472 | 0.0049 |
+Hybrid MiniLM is the best balanced/stable configuration. Hybrid BGE achieves the strongest observed Recall@10 after encoder-specific tuning. Mini-DLRM also improves substantially with stronger negative sampling, showing that optimization quality matters. Because leave-last-out evaluation has one positive test item per user, HitRate@10 and Recall@10 are effectively identical in this setup.
 
-The hybrid model improved overall ranking quality and showed lower seed variance in the sparse long-tail setting. In the earlier tiny dense setting with roughly 47 items, semantic embeddings did not help, which is the useful contrast: dataset regime matters.
+These results are from sampled candidate ranking, not full-catalog retrieval.
 
 Current recommended configuration from tuning:
 
