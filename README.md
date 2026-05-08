@@ -29,6 +29,16 @@ Controlled multi-seed ablation at `epochs=5`, `lr=1e-3`, `emb_dim=32`, `train_ne
 
 The hybrid model improved overall ranking quality and showed lower seed variance in the sparse long-tail setting. In the earlier tiny dense setting with roughly 47 items, semantic embeddings did not help, which is the useful contrast: dataset regime matters.
 
+Current recommended configuration from tuning:
+
+```text
+Hybrid Mini-DLRM + Semantic
+epochs = 5
+lr = 1e-3
+emb_dim = 32
+train_negatives = 12
+```
+
 ## Project Highlights
 
 - Sparse recommendation setup with explicit long-tail evaluation
@@ -152,11 +162,40 @@ The larger sparse long-tail regime was more informative. Mini-DLRM ranked head i
 
 The multi-seed ablation showed that semantic priors improved both mean Recall@10 and stability at the best observed setting. This suggests semantic embeddings can act as a useful regularizing prior when item interactions are sparse and metadata is informative.
 
+## Hyperparameter Tuning Findings
+
+Epoch tuning compared 5 versus 10 epochs with `lr=1e-3`, `emb_dim=32`, and `train_negatives=4` across seeds 42, 123, and 2026.
+
+| Model | Epochs | Recall@10 mean | Recall@10 std | NDCG@10 mean | NDCG@10 std |
+|---|---:|---:|---:|---:|---:|
+| Mini-DLRM | 5 | 0.2264 | 0.0117 | 0.1255 | 0.0055 |
+| Mini-DLRM | 10 | 0.2336 | 0.0049 | 0.1263 | 0.0068 |
+| Hybrid Mini-DLRM + Semantic | 5 | 0.2472 | 0.0049 | 0.1318 | 0.0034 |
+| Hybrid Mini-DLRM + Semantic | 10 | 0.2392 | 0.0167 | 0.1254 | 0.0063 |
+
+Hybrid performs best at 5 epochs. Extending to 10 epochs reduces mean Recall/NDCG and increases variance, suggesting the semantic prior helps early but longer training may overfit sparse collaborative signals or increase head/popularity bias. Mini-DLRM improves slightly with more epochs, which is consistent with a purely collaborative model needing more optimization to fit sparse interaction patterns.
+
+Negative sampling tuning compared `train_negatives=8,12,16` with `epochs=5`, `lr=1e-3`, and `emb_dim=32`.
+
+| Model | Train negatives | Recall@10 mean | Recall@10 std | NDCG@10 mean | NDCG@10 std |
+|---|---:|---:|---:|---:|---:|
+| Mini-DLRM | 8 | 0.2444 | 0.0218 | 0.1366 | 0.0099 |
+| Mini-DLRM | 12 | 0.2488 | 0.0156 | 0.1390 | 0.0099 |
+| Mini-DLRM | 16 | 0.2592 | 0.0163 | 0.1445 | 0.0105 |
+| Hybrid Mini-DLRM + Semantic | 8 | 0.2576 | 0.0066 | 0.1411 | 0.0037 |
+| Hybrid Mini-DLRM + Semantic | 12 | 0.2596 | 0.0073 | 0.1440 | 0.0007 |
+| Hybrid Mini-DLRM + Semantic | 16 | 0.2604 | 0.0050 | 0.1429 | 0.0035 |
+
+Increasing negatives from 4 to 8/12/16 improves ranking quality. Hybrid remains more stable across seeds than Mini-DLRM, and `train_negatives=12` is the best balanced hybrid setting: strong Recall@10, best NDCG@10, and very low NDCG variance. At 16 negatives, Mini-DLRM nearly catches up in mean performance but still has much higher variance.
+
+Final tuning takeaway: semantic embeddings improve sparse recommendation not only by raising mean ranking quality, but also by reducing seed sensitivity and stabilizing optimization under harder negative sampling.
+
 ## Insights
 
 - Semantic embeddings help more in sparse long-tail settings than in tiny dense item universes.
 - DLRM-style interaction models can become strongly head-biased.
 - Frozen semantic priors can improve seed stability and generalization.
+- Harder negative sampling improves ranking quality, with `train_negatives=12` the best balanced hybrid setting observed.
 - Recommendation quality depends heavily on dataset regime, metadata coverage, negative sampling, and feature richness.
 
 ## Evaluation Metrics
