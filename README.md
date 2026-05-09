@@ -6,16 +6,27 @@ This is a research-engineering portfolio project: compact, reproducible, and des
 
 ## Key Results
 
-Real-data experiment: Amazon Reviews 2023 `Movies_and_TV` subset.
+Latest real-data experiment: Amazon Reviews 2023 `Movies_and_TV` subset, evaluated with leave-last-out sampled ranking using 1 positive item plus 99 sampled negatives per user.
 
 | Setting | Value |
 |---|---:|
-| Users | 832 |
-| Items | 2,215 |
-| Positive interactions | 7,356 |
-| Sparsity | 0.9960 |
+| Users | 13,509 |
+| Items | 20,896 |
+| Positive interactions | 138,919 |
+| Sparsity | 0.99951 |
+| Minimum user interactions | 5 |
+| Minimum item interactions | 2 |
 
-Final tuned sampled-ranking benchmark:
+Latest 138k-scale Hybrid tuning result:
+
+| Model | Setting | Recall@10 | NDCG@10 | HeadRecall@10 | TailRecall@10 | TailExposure@10 | AvgTrainPopularity@10 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Base Hybrid | MiniLM, epochs=4, emb_dim=32, negatives=8 | 0.4806 | 0.2919 | 0.7629 | 0.1793 | 0.3510 | 15.0823 |
+| Hybrid + inverse-popularity boost | alpha=0.15 | 0.4797 | 0.2916 | 0.7583 | 0.1823 | 0.3567 | 14.9803 |
+
+The best overall configuration remains compact: `sentence-transformers/all-MiniLM-L6-v2`, `epochs=4`, `lr=1e-3`, `emb_dim=32`, and `train_negatives=8`. The inverse-popularity cold-start boost slightly increases tail exposure and tail relevance while slightly reducing head Recall and overall NDCG, which is the expected exploration-exploitation tradeoff.
+
+Earlier tuned sampled-ranking benchmark on the smaller sparse subset:
 
 | Model | Setting | Recall@10 | HitRate@10 | NDCG@10 |
 |---|---|---:|---:|---:|
@@ -162,6 +173,28 @@ The larger sparse long-tail regime was more informative. Mini-DLRM ranked head i
 
 The multi-seed ablation showed that semantic priors improved both mean Recall@10 and stability at the best observed setting. This suggests semantic embeddings can act as a useful regularizing prior when item interactions are sparse and metadata is informative.
 
+## Latest 138k-scale Results
+
+The project was later scaled to a larger `Movies_and_TV` subset with 13,509 users, 20,896 items, 138,919 positive interactions, and 0.99951 sparsity. This setting is more representative than the earlier ~49k-interaction subset because the item universe is larger, the matrix is sparser, and tail-item ranking is a more prominent part of the sampled-candidate task.
+
+The main 3-seed setting used `sentence-transformers/all-MiniLM-L6-v2`, Hybrid Mini-DLRM + Semantic, `epochs=4`, `lr=1e-3`, `emb_dim=32`, and `train_negatives=8`. Evaluation remains sampled ranking with one held-out positive and 99 sampled negatives per user.
+
+| Model | Recall@10 mean | NDCG@10 mean | HeadRecall@10 mean | HeadNDCG@10 mean | TailRecall@10 mean | TailNDCG@10 mean | TailExposure@10 mean | AvgTrainPopularity@10 mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Base Hybrid | 0.480606 | 0.291890 | 0.762905 | 0.494993 | 0.179342 | 0.075144 | 0.350981 | 15.082338 |
+| Hybrid + inverse-popularity boost, alpha=0.15 | 0.479680 | 0.291556 | 0.758317 | 0.492750 | 0.182326 | 0.076847 | 0.356670 | 14.980276 |
+
+### Tuning Observations
+
+- The best overall configuration is still relatively compact: `emb_dim=32`, `lr=1e-3`, `train_negatives=8`, and `epochs=4`.
+- Increasing embedding dimension to 64 improves tail relevance somewhat but lowers overall Recall/NDCG; `emb_dim=96` clearly overfits and hurts overall performance.
+- Smaller learning rates underfit within the fixed 4-epoch budget, while `lr=1e-3` remains strongest.
+- Increasing train negatives to 12 or 16 does not improve overall ranking in this sparse regime and appears to hurt optimization.
+
+### Interpretation
+
+The 138k-scale run strengthens the sparse long-tail conclusion: semantic hybrid ranking remains useful, but capacity and optimization settings matter. The inverse-popularity cold-start boost consistently shifts exposure toward tail items: `TailExposure@10` increases, `AvgTrainPopularity@10` decreases, and TailRecall/TailNDCG improve slightly. The tradeoff is small but real: HeadRecall and overall NDCG decrease slightly. This supports using smooth post-ranking exploration priors for long-tail visibility, while avoiding overclaiming relevance gains or production readiness.
+
 ## Hyperparameter Tuning Findings
 
 Epoch tuning compared 5 versus 10 epochs with `lr=1e-3`, `emb_dim=32`, and `train_negatives=4` across seeds 42, 123, and 2026.
@@ -203,8 +236,10 @@ Two modes are supported: `threshold`, which boosts items with train interaction 
 This analysis should be interpreted as an accuracy versus exposure tradeoff. A boost can increase tail exposure without proving better relevance, so the runner reports both ranking metrics and exposure diagnostics:
 
 ```text
-Recall@10, NDCG@10, head/tail Recall@10, TailExposure@10, AvgTrainPopularity@10
+Recall@10, NDCG@10, HeadRecall@10, TailRecall@10, TailExposure@10, AvgTrainPopularity@10
 ```
+
+`TailExposure@10` measures how many recommended top-10 slots go to tail items. `TailRecall@10` and `TailNDCG@10` instead measure whether users whose true held-out item is a tail item are better served. Exposure improvement alone does not prove relevance improvement; the split relevance metrics make that tradeoff explicit.
 
 Example smoke commands:
 
@@ -231,12 +266,12 @@ python scripts/run_ablation.py \
 
 ## Final Findings
 
-The final experimental setting is a sparse Amazon Reviews 2023 `Movies_and_TV` subset with 832 users, 2,215 items, 7,356 interactions, and 0.9960 sparsity. Evaluation uses leave-last-out ranking with 1 held-out positive and 99 sampled negatives per user. Because each test case has a single positive item, `HitRate@10` and `Recall@10` are effectively identical in this setup.
+The latest experimental setting is a sparse Amazon Reviews 2023 `Movies_and_TV` subset with 13,509 users, 20,896 items, 138,919 interactions, and 0.99951 sparsity. Evaluation uses leave-last-out ranking with 1 held-out positive and 99 sampled negatives per user. Because each test case has a single positive item, `HitRate@10` and `Recall@10` are effectively identical in this setup.
 
 The project progressed through five stages:
 
 1. Collaborative baselines: popularity, Two-Tower, and Mini-DLRM established the ranking baseline. On the initial tiny 47-item dense subset, Two-Tower and Mini-DLRM were similar, and semantic priors had little room to help.
-2. Sparse long-tail regime: expanding to 2,215 items made tail-item behavior central. Hybrid semantic recommendation began outperforming purely collaborative models.
+2. Sparse long-tail regime: expanding through the 2,215-item and 20,896-item subsets made tail-item behavior central. Hybrid semantic recommendation began outperforming purely collaborative models, and the larger 138k-interaction run produced more representative sparse-ranking behavior than the earlier ~49k subset.
 3. Negative sampling: increasing train negatives from 4 to 8/12/16 consistently improved ranking quality, especially NDCG. Semantic hybrid models remained more stable across seeds under harder negative sampling.
 4. Embedding capacity: tuning embedding dimensions from 16 to 96 exposed a capacity/stability tradeoff. Larger dimensions increased capacity but could increase variance or over-parameterize sparse interactions.
 5. Semantic encoder comparison: MiniLM, BGE-small, and e5-small behaved differently. MiniLM was the strongest balanced/stable baseline, BGE-small achieved the strongest tuned Recall, and e5-small was weaker in this recommendation setting.
@@ -276,16 +311,17 @@ NDCG@10 mean ~= 0.137
 std ~= 0.012
 ```
 
-The main conclusion is that semantic item embeddings become increasingly valuable under sparse long-tail recommendation settings. They improve tail-item discrimination, reduce seed sensitivity, and provide a stabilizing inductive bias when negative sampling becomes harder. The strongest general retrieval encoder is not automatically the best recommender semantic prior; alignment between semantic embedding geometry and recommender optimization matters.
+The main conclusion is that semantic item embeddings become increasingly valuable under sparse long-tail recommendation settings, but the benefit depends on capacity, negative sampling, and optimization budget. Smooth inverse-popularity boosting can slightly improve tail relevance and exposure, while slightly reducing head and overall metrics. The strongest general retrieval encoder is not automatically the best recommender semantic prior; alignment between semantic embedding geometry and recommender optimization matters.
 
 ## Lessons Learned / Key Insights
 
 - Semantic embeddings help more in sparse long-tail settings than in tiny dense item universes.
 - DLRM-style interaction models can become strongly head-biased.
 - Frozen semantic priors can improve seed stability and generalization.
-- Harder negative sampling improves ranking quality, with `train_negatives=12` the best balanced hybrid setting observed.
+- Negative sampling has a regime-dependent optimum: `train_negatives=12` was strongest in the earlier subset, while `train_negatives=8` worked better in the 138k-scale sparse run.
 - Semantic encoder choice materially affects hybrid recommender performance.
-- Sparse recommendation has a real capacity/stability tradeoff; larger embeddings are not always better.
+- Sparse recommendation has a real capacity/stability tradeoff; larger embeddings are not always better, and `emb_dim=96` overfit in the larger sparse setting.
+- Cold-start boosting is best treated as a modest post-ranking exploration heuristic: it can shift exposure and slightly improve tail relevance, but it does not replace model-side relevance learning.
 - Recommendation quality depends heavily on dataset regime, metadata coverage, negative sampling, and feature richness.
 
 Most important insight: the project evolved from a simple "DLRM + semantic embeddings" implementation into a systematic analysis of semantic priors under sparse long-tail recommendation optimization.

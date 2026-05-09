@@ -65,6 +65,40 @@ def evaluate_leave_one_out(
     }
 
 
+def evaluate_leave_one_out_by_true_item_groups(
+    eval_candidates: list[dict[str, object]],
+    head_items: set[int],
+    tail_items: set[int],
+    k: int = 10,
+    scorer: Callable[[int, list[int]], np.ndarray | list[float]] | None = None,
+) -> dict[str, float | int]:
+    """Evaluate leave-one-out metrics split by whether the true item is head or tail."""
+
+    def group_metrics(prefix: str, group_items: set[int]) -> dict[str, float | int]:
+        group_candidates = [
+            row for row in eval_candidates if int(row["true_item"]) in group_items
+        ]
+        if not group_candidates:
+            return {
+                f"{prefix}Recall@{k}": np.nan,
+                f"{prefix}HitRate@{k}": np.nan,
+                f"{prefix}NDCG@{k}": np.nan,
+                f"Num{prefix}EvalUsers": 0,
+            }
+        metrics = evaluate_leave_one_out(None, group_candidates, k=k, scorer=scorer)
+        return {
+            f"{prefix}Recall@{k}": metrics[f"Recall@{k}"],
+            f"{prefix}HitRate@{k}": metrics[f"HitRate@{k}"],
+            f"{prefix}NDCG@{k}": metrics[f"NDCG@{k}"],
+            f"Num{prefix}EvalUsers": len(group_candidates),
+        }
+
+    return {
+        **group_metrics("Head", head_items),
+        **group_metrics("Tail", tail_items),
+    }
+
+
 def metrics_to_frame(results: dict[str, dict[str, float]]) -> pd.DataFrame:
     rows = []
     for model_name, metrics in results.items():

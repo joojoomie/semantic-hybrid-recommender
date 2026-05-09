@@ -27,7 +27,7 @@ from src.data import (
     normalize_columns,
     temporal_split,
 )
-from src.metrics import evaluate_leave_one_out
+from src.metrics import evaluate_leave_one_out, evaluate_leave_one_out_by_true_item_groups
 from src.models import HybridDLRM, MiniDLRM, TwoTower
 from src.negative_sampling import build_eval_candidates, build_training_samples, build_user_positive_items
 from src.rerank import compute_item_train_counts, evaluate_ranking_exposure, make_cold_start_boost_scorer
@@ -264,7 +264,8 @@ def summarize_metrics(df: pd.DataFrame, metric_cols: list[str], extra_group_cols
         "cold_start_threshold",
     ]
     present_group_cols = [col for col in group_cols if col in df.columns]
-    summary = df.groupby(present_group_cols, dropna=False)[metric_cols].agg(["mean", "std"]).reset_index()
+    present_metric_cols = [col for col in metric_cols if col in df.columns]
+    summary = df.groupby(present_group_cols, dropna=False)[present_metric_cols].agg(["mean", "std"]).reset_index()
     summary.columns = [
         "_".join(str(part) for part in column if part) if isinstance(column, tuple) else str(column)
         for column in summary.columns
@@ -277,14 +278,22 @@ def evaluate_scorer_row(
     scorer: object,
     test_candidates: list[dict[str, object]],
     item_train_counts: np.ndarray,
+    head_items: set[int],
     tail_items: set[int],
     k: int,
     metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     metadata = metadata or {}
     metrics = evaluate_leave_one_out(None, test_candidates, k=k, scorer=scorer)
+    split_metrics = evaluate_leave_one_out_by_true_item_groups(
+        test_candidates,
+        head_items,
+        tail_items,
+        k=k,
+        scorer=scorer,
+    )
     exposure = evaluate_ranking_exposure(scorer, test_candidates, item_train_counts, tail_items, k=k)
-    return {"Model": model_name, **metrics, **exposure, **metadata}
+    return {"Model": model_name, **metrics, **split_metrics, **exposure, **metadata}
 
 
 def base_scorer_metadata() -> dict[str, object]:
@@ -349,6 +358,7 @@ def run_one_config(
                 scorer,
                 test_candidates,
                 item_train_counts,
+                head_items,
                 tail_items,
                 args.k,
                 scorer_metadata["Popularity"],
@@ -376,6 +386,7 @@ def run_one_config(
                 scorer,
                 test_candidates,
                 item_train_counts,
+                head_items,
                 tail_items,
                 args.k,
                 scorer_metadata["Two-Tower"],
@@ -410,6 +421,7 @@ def run_one_config(
                 scorer,
                 test_candidates,
                 item_train_counts,
+                head_items,
                 tail_items,
                 args.k,
                 scorer_metadata["Mini-DLRM"],
@@ -454,6 +466,7 @@ def run_one_config(
                 scorer,
                 test_candidates,
                 item_train_counts,
+                head_items,
                 tail_items,
                 args.k,
                 scorer_metadata["Hybrid Mini-DLRM + Semantic"],
@@ -480,6 +493,7 @@ def run_one_config(
                     boosted_scorer,
                     test_candidates,
                     item_train_counts,
+                    head_items,
                     tail_items,
                     args.k,
                     scorer_metadata[boosted_name],
@@ -517,6 +531,14 @@ def write_outputs(args: argparse.Namespace, overall: pd.DataFrame, long_tail: pd
         f"Recall@{args.k}",
         f"HitRate@{args.k}",
         f"NDCG@{args.k}",
+        f"HeadRecall@{args.k}",
+        f"HeadHitRate@{args.k}",
+        f"HeadNDCG@{args.k}",
+        f"TailRecall@{args.k}",
+        f"TailHitRate@{args.k}",
+        f"TailNDCG@{args.k}",
+        "NumHeadEvalUsers",
+        "NumTailEvalUsers",
         f"TailExposure@{args.k}",
         f"AvgTrainPopularity@{args.k}",
     ]
