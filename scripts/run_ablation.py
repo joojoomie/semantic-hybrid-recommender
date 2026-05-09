@@ -29,7 +29,12 @@ from src.data import (
 )
 from src.metrics import evaluate_leave_one_out, evaluate_leave_one_out_by_true_item_groups
 from src.models import HybridDLRM, MiniDLRM, TwoTower
-from src.negative_sampling import build_eval_candidates, build_training_samples, build_user_positive_items
+from src.negative_sampling import (
+    build_eval_candidates,
+    build_eval_candidates_multi_positive,
+    build_training_samples,
+    build_user_positive_items,
+)
 from src.rerank import compute_item_train_counts, evaluate_ranking_exposure, make_cold_start_boost_scorer
 from src.semantic_embeddings import build_item_text, load_or_create_semantic_embeddings
 from src.train import ItemFeatureStore, make_popularity_scorer, make_torch_scorer, train_model
@@ -127,12 +132,48 @@ def limit_eval_candidates(
     return [candidates[int(idx)] for idx in indices]
 
 
+def candidate_true_items(row: dict[str, object]) -> list[int]:
+    if "true_items" in row:
+        return [int(item) for item in row["true_items"]]  # type: ignore[union-attr]
+    return [int(row["true_item"])]
+
+
 def build_head_tail_items(train_df: pd.DataFrame, num_items: int) -> tuple[set[int], set[int]]:
     popularity = train_df["item_idx"].value_counts()
     head_cutoff = max(1, int(np.ceil(num_items * 0.2)))
     head_items = set(popularity.sort_values(ascending=False).head(head_cutoff).index.astype(int))
     tail_items = set(range(num_items)) - head_items
     return head_items, tail_items
+
+
+def temporal_split_with_test_positives(
+    df: pd.DataFrame,
+    num_test_positives: int,
+    min_train_interactions: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if num_test_positives == 1:
+        return temporal_split(df)
+    if num_test_positives < 1:
+        raise ValueError("--num-test-positives must be at least 1.")
+
+    ordered = df.sort_values(["user_id", "timestamp", "item_id"]).copy()
+    sizes = ordered.groupby("user_id")["item_id"].transform("size")
+    required = min_train_interactions + num_test_positives + 1
+    eligible = ordered[sizes >= required].copy()
+    if eligible.empty:
+        raise RuntimeError(
+            "No users have enough interactions for the requested multi-positive split. "
+            "Use a smaller --num-test-positives or lower --min-user-interactions."
+        )
+    eligible["rank_from_end"] = eligible.groupby("user_id").cumcount(ascending=False)
+    test_df = eligible[eligible["rank_from_end"] < num_test_positives].drop(columns="rank_from_end")
+    val_df = eligible[eligible["rank_from_end"] == num_test_positives].drop(columns="rank_from_end")
+    train_df = eligible[eligible["rank_from_end"] > num_test_positives].drop(columns="rank_from_end")
+    return (
+        train_df.reset_index(drop=True),
+        val_df.reset_index(drop=True),
+        test_df.reset_index(drop=True),
+    )
 
 
 def prepare_data(args: argparse.Namespace) -> PreparedData:
@@ -155,7 +196,11 @@ def prepare_data(args: argparse.Namespace) -> PreparedData:
     if interactions.empty:
         raise RuntimeError("No interactions remain after filtering. Relax the min interaction thresholds.")
 
-    train_df, val_df, test_df = temporal_split(interactions)
+    train_df, val_df, test_df = temporal_split_with_test_positives(
+        interactions,
+        num_test_positives=args.num_test_positives,
+        min_train_interactions=args.min_user_interactions,
+    )
     user_mapping, item_mapping = build_id_mappings(train_df, val_df, test_df)
     train_df = apply_id_mappings(train_df, user_mapping, item_mapping)
     val_df = apply_id_mappings(val_df, user_mapping, item_mapping)
@@ -179,6 +224,7 @@ def prepare_data(args: argparse.Namespace) -> PreparedData:
         "min_item_interactions": args.min_item_interactions,
         "max_interactions": args.max_interactions if args.max_interactions is not None else "all",
         "eval_negatives": args.eval_negatives,
+        "num_test_positives": args.num_test_positives,
         "k": args.k,
     }
 
@@ -208,7 +254,7 @@ def evaluate_long_tail(
     scorer_metadata: dict[str, dict[str, object]] | None = None,
 ) -> pd.DataFrame:
     def filter_candidates_by_items(candidates: list[dict[str, object]], allowed_items: set[int]) -> list[dict[str, object]]:
-        return [row for row in candidates if int(row["true_item"]) in allowed_items]
+        return [row for row in candidates if any(item in allowed_items for item in candidate_true_items(row))]
 
     scorer_metadata = scorer_metadata or {}
     rows = []
@@ -222,7 +268,14 @@ def evaluate_long_tail(
                     "Model": model_name,
                     "Group": group_name,
                     "Test Users": len(group_candidates),
-                    "Test Items": len({int(row["true_item"]) for row in group_candidates}),
+                    "Test Items": len(
+                        {
+                            item
+                            for row in group_candidates
+                            for item in candidate_true_items(row)
+                            if item in item_group
+                        }
+                    ),
                     **metrics,
                     **exposure,
                     **scorer_metadata.get(model_name, {}),
@@ -329,13 +382,22 @@ def run_one_config(
         num_negatives=args.eval_negatives,
         seed=config.seed + 1,
     )
-    test_candidates = build_eval_candidates(
-        data.test_df,
-        data.known_positive_items,
-        data.num_items,
-        num_negatives=args.eval_negatives,
-        seed=config.seed + 2,
-    )
+    if args.num_test_positives == 1:
+        test_candidates = build_eval_candidates(
+            data.test_df,
+            data.known_positive_items,
+            data.num_items,
+            num_negatives=args.eval_negatives,
+            seed=config.seed + 2,
+        )
+    else:
+        test_candidates = build_eval_candidates_multi_positive(
+            data.test_df,
+            data.known_positive_items,
+            data.num_items,
+            num_negatives=args.eval_negatives,
+            seed=config.seed + 2,
+        )
     val_candidates_for_training = limit_eval_candidates(
         val_candidates,
         args.eval_user_limit,
@@ -539,6 +601,8 @@ def write_outputs(args: argparse.Namespace, overall: pd.DataFrame, long_tail: pd
         f"TailNDCG@{args.k}",
         "NumHeadEvalUsers",
         "NumTailEvalUsers",
+        "NumHeadEvalPositives",
+        "NumTailEvalPositives",
         f"TailExposure@{args.k}",
         f"AvgTrainPopularity@{args.k}",
     ]
@@ -576,6 +640,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-negatives", default="2")
     parser.add_argument("--quick-configs", type=int, default=2)
     parser.add_argument("--eval-negatives", type=int, default=99)
+    parser.add_argument(
+        "--num-test-positives",
+        type=int,
+        default=1,
+        choices=[1, 3, 5],
+        help="Number of last interactions per user to hold out as test positives. Default 1 preserves prior behavior.",
+    )
     parser.add_argument("--max-interactions", type=int, default=None)
     parser.add_argument("--min-user-interactions", type=int, default=5)
     parser.add_argument("--min-item-interactions", type=int, default=2)

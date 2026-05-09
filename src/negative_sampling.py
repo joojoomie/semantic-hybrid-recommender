@@ -69,3 +69,30 @@ def build_eval_candidates(
             }
         )
     return candidates
+
+
+def build_eval_candidates_multi_positive(
+    eval_df: pd.DataFrame,
+    user_pos_items: dict[int, set[int]],
+    num_items: int,
+    num_negatives: int = 99,
+    seed: int = 43,
+) -> list[dict[str, object]]:
+    rng = np.random.default_rng(seed)
+    candidates = []
+    ordered = eval_df.sort_values(["user_idx", "timestamp", "item_idx"])
+    for user_idx, group in ordered.groupby("user_idx", sort=False):
+        user_idx = int(user_idx)
+        true_items = [int(item_idx) for item_idx in group["item_idx"].tolist()]
+        negatives = sample_negatives(user_idx, user_pos_items, num_items, num_negatives, rng)
+        item_candidates = true_items + negatives
+        rng.shuffle(item_candidates)
+        candidates.append(
+            {
+                "user_idx": user_idx,
+                "true_item": true_items[-1],
+                "true_items": true_items,
+                "items": item_candidates,
+            }
+        )
+    return candidates
