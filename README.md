@@ -8,17 +8,43 @@ The main model is a semantic Hybrid Mini-DLRM: a Mini-DLRM ranker augmented with
 
 ## Key Results
 
-Main benchmark: Amazon Reviews 2023 `Movies_and_TV`, leave-last-out sampled ranking with 1 held-out positive item and 99 sampled non-interacted negatives per user.
+Main benchmark: Amazon Reviews 2023 `Movies_and_TV`, leave-last-N-out sampled ranking with `num_test_positives=3`. Each eligible user has 3 held-out positive items ranked against 99 sampled non-interacted negatives.
+
+### Dataset and Evaluation Population
+
+The original filtered subset contains 13,509 users, 20,896 items, and 138,919 positive interactions. Under the fixed multi-positive protocol, users without enough history for train, validation, and 3 test positives are excluded from evaluation, leaving the eligible population below.
 
 | Setting | Value |
 |---|---:|
-| Users | 13,509 |
-| Items | 20,896 |
+| Eligible users | 4,899 |
+| Eligible items | 19,707 |
 | Positive interactions | 138,919 |
-| Sparsity | 0.99951 |
+| Sparsity | 0.99856 |
 | Minimum user interactions | 5 |
 | Minimum item interactions | 2 |
-| Eval protocol | 1 positive + 99 negatives |
+| Eval protocol | 3 positives + 99 negatives |
+| NumHeadEvalUsers mean | 3,834 |
+| NumTailEvalUsers mean | 4,132 |
+| NumHeadEvalPositives mean | 6,843 |
+| NumTailEvalPositives mean | 7,854 |
+
+## Multi-positive Evaluation: 3 Positives + 99 Negatives
+
+| Model | Recall@10 | HitRate@10 | NDCG@10 | HeadRecall@10 | HeadNDCG@10 | TailRecall@10 | TailHitRate@10 | TailNDCG@10 | TailExposure@10 | AvgTrainPopularity@10 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Two-Tower | 0.301456 | 0.615126 | 0.230036 | 0.634455 | 0.404431 | 0.005183 | 0.009681 | 0.001984 | 0.030966 | 14.141478 |
+| Popularity | 0.320576 | 0.636967 | 0.245931 | 0.681512 | 0.435126 | 0.000202 | 0.000363 | 0.000071 | 0.000388 | 14.691437 |
+| Mini-DLRM | 0.370926 | 0.705042 | 0.277062 | 0.604134 | 0.397169 | 0.152085 | 0.259439 | 0.080227 | 0.426628 | 8.582466 |
+| Hybrid Mini-DLRM + Semantic | 0.434306 | 0.767810 | 0.341041 | 0.718288 | 0.505856 | 0.175722 | 0.284729 | 0.089091 | 0.366850 | 9.187212 |
+| Hybrid + inverse-popularity boost alpha=0.15 | 0.434340 | 0.767197 | 0.340624 | 0.715289 | 0.503142 | 0.178243 | 0.288238 | 0.090643 | 0.372658 | 9.122362 |
+
+Multi-positive evaluation is now the main protocol because it better reflects users having multiple relevant held-out items. Popularity remains strongly head-biased: it has high HeadRecall but almost zero TailRecall and TailExposure. Two-Tower performs worst overall and has weak tail generalization. Mini-DLRM improves over simple baselines, but Hybrid Mini-DLRM + Semantic is the strongest non-boosted model, improving Recall@10 from 0.370926 to 0.434306 and NDCG@10 from 0.277062 to 0.341041 versus Mini-DLRM. It also improves TailRecall@10 from 0.152085 to 0.175722 and TailNDCG@10 from 0.080227 to 0.089091, showing that frozen MiniLM item-text embeddings provide useful semantic priors in sparse long-tail recommendation.
+
+The inverse-popularity boost remains optional and modest. Compared with the base Hybrid, Recall@10 is essentially unchanged, NDCG@10 drops slightly, TailRecall@10 improves from 0.175722 to 0.178243, TailNDCG@10 improves from 0.089091 to 0.090643, TailExposure@10 improves from 0.366850 to 0.372658, and AvgTrainPopularity@10 decreases from 9.187212 to 9.122362. This is best interpreted as a small exploration-exploitation tradeoff, not as a new model or production cold-start solution.
+
+## Single-positive Compatibility Benchmark
+
+The earlier single-positive protocol is retained for standard benchmark compatibility, not as the main project result. It uses the original 13,509-user, 20,896-item filtered population with 1 held-out positive item plus 99 negatives per user. In this setting, `Recall@K` and `HitRate@K` are equivalent because there is only one positive item.
 
 | Model | Recall@10 | NDCG@10 | HeadRecall@10 | TailRecall@10 | TailNDCG@10 | TailExposure@10 | AvgTrainPopularity@10 |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -28,39 +54,19 @@ Main benchmark: Amazon Reviews 2023 `Movies_and_TV`, leave-last-out sampled rank
 | Hybrid Mini-DLRM + Semantic | 0.465727 | 0.280997 | 0.745698 | 0.166947 | 0.070298 | 0.348845 | 14.923451 |
 | Hybrid + inverse-popularity boost alpha=0.15 | 0.465282 | 0.280582 | 0.741898 | 0.170084 | 0.071741 | 0.355037 | 14.814953 |
 
-The model hierarchy is clean: `Two-Tower < Popularity < Mini-DLRM < Hybrid Mini-DLRM + Semantic`. Popularity captures head demand and looks competitive overall, but nearly fails on tail items. Mini-DLRM improves over simple baselines through feature interactions. Hybrid improves both overall ranking and tail relevance by adding semantic item priors. The inverse-popularity boost gives a modest tail exposure and tail relevance shift with a tiny head/overall cost.
-
-## Multi-positive Evaluation
-
-Additional robustness check: `num_test_positives=3`, where each eligible user has 3 held-out positive items ranked against 99 sampled non-interacted negatives. Users without enough history for train, validation, and 3 test positives are excluded. This does not replace the main benchmark; it gives a more realistic view of users having multiple relevant items.
-
-| Setting | Value |
-|---|---:|
-| Evaluated users | 4,899 |
-| Items | 19,707 |
-| Interactions | 138,919 |
-| Sparsity | 0.99856 |
-| NumHeadEvalPositives | 6,843 |
-| NumTailEvalPositives | 7,854 |
-
-| Model | Recall@10 | HitRate@10 | NDCG@10 | HeadRecall@10 | TailRecall@10 | TailHitRate@10 | TailNDCG@10 | TailExposure@10 | AvgTrainPopularity@10 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Mini-DLRM | 0.404368 | 0.731986 | 0.316013 | 0.765454 | 0.084463 | 0.148112 | 0.036546 | 0.193856 | 11.100204 |
-| Hybrid Mini-DLRM + Semantic | 0.435701 | 0.768932 | 0.342207 | 0.724939 | 0.172435 | 0.282914 | 0.084377 | 0.347295 | 9.444050 |
-| Hybrid + inverse-popularity boost alpha=0.15 | 0.435667 | 0.769034 | 0.341914 | 0.721874 | 0.175137 | 0.286544 | 0.086249 | 0.354266 | 9.362564 |
-
-Multi-positive evaluation reduces single-item noise. The semantic Hybrid advantage is clearer here: Hybrid improves overall Recall/NDCG and roughly doubles TailRecall and TailNDCG versus Mini-DLRM. Mini-DLRM has stronger HeadRecall but much weaker tail relevance, suggesting stronger head-item memorization and weaker tail generalization. The inverse-popularity boost remains modest: it slightly improves TailRecall, TailNDCG, and TailExposure while leaving overall Recall/NDCG nearly unchanged.
+The single-positive result shows the same broad pattern: popularity is strongly head-biased, Mini-DLRM improves over simpler collaborative baselines, and the semantic Hybrid gives the strongest overall ranking and tail relevance.
 
 ## Current Recommended Configuration
 
 ```text
 Model: Hybrid Mini-DLRM + Semantic
 Semantic encoder: sentence-transformers/all-MiniLM-L6-v2
-epochs: 4
+epochs: 5
 lr: 1e-3
 emb_dim: 32
 train_negatives: 8
 eval_negatives: 99
+num_test_positives: 3 for main evaluation
 optional exploration boost: inverse_popularity alpha=0.15
 ```
 
@@ -133,15 +139,15 @@ Run the current main benchmark:
 
 ```bash
 python scripts/run_ablation.py \
-  --run-name movies_tv_138k_main_baselines \
-  --models popularity,two_tower,mini_dlrm,hybrid \
+  --run-name movies_tv_138k_multipos3_main \
+  --models mini_dlrm,hybrid \
   --seeds 42,43,44 \
-  --epochs 4 \
+  --epochs 5 \
   --learning-rates 0.001 \
   --embedding-dims 32 \
   --train-negatives 8 \
   --eval-negatives 99 \
-  --num-test-positives 1 \
+  --num-test-positives 3 \
   --batch-size 4096 \
   --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
   --cold-start-boost-mode inverse_popularity \
@@ -174,18 +180,18 @@ This project evaluates sampled candidate ranking, not full-catalog ANN retrieval
 
 ## Evaluation Metrics
 
-Single-positive evaluation:
-
-- Each user has 1 held-out positive plus sampled negatives.
-- `Recall@K` equals `HitRate@K` because there is only one positive item.
-- This is the main benchmark protocol for comparability.
-
 Multi-positive evaluation:
 
 - Each eligible user has N held-out positives plus `eval_negatives` sampled negatives.
 - `Recall@K` is the fraction of held-out positives retrieved in top K.
 - `HitRate@K` is whether at least one held-out positive appears in top K.
 - `NDCG@K` accounts for the ranks of all held-out positives.
+
+Single-positive compatibility evaluation:
+
+- Each user has 1 held-out positive plus sampled negatives.
+- `Recall@K` equals `HitRate@K` because there is only one positive item.
+- This is retained for comparison with common leave-one-out ranking setups, but the main project benchmark is multi-positive.
 
 Long-tail diagnostics:
 
@@ -200,7 +206,7 @@ Long-tail diagnostics:
 3. Mini-DLRM improves over simple baselines but remains weaker on tail relevance.
 4. Hybrid Mini-DLRM + Semantic improves overall ranking and tail relevance.
 5. Multi-positive evaluation shows stronger semantic Hybrid gains, especially on tail positives.
-6. Larger embedding dimensions can overfit; `emb_dim=32` is best overall in the 138k run.
+6. Larger embedding dimensions can overfit; `emb_dim=32` is best overall in the final 138k multi-positive run.
 7. Negative sampling optimum is regime-dependent; `train_negatives=8` is best in the 138k run.
 8. Cold-start boosting is a modest exploration heuristic, not a replacement for relevance learning.
 
