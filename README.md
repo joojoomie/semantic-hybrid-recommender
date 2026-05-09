@@ -17,16 +17,34 @@ Latest real-data experiment: Amazon Reviews 2023 `Movies_and_TV` subset, evaluat
 | Minimum user interactions | 5 |
 | Minimum item interactions | 2 |
 
-Latest 138k-scale Hybrid tuning result:
+Latest 138k-scale baseline comparison:
 
-| Model | Setting | Recall@10 | NDCG@10 | HeadRecall@10 | TailRecall@10 | TailExposure@10 | AvgTrainPopularity@10 |
-|---|---|---:|---:|---:|---:|---:|---:|
-| Base Hybrid | MiniLM, epochs=4, emb_dim=32, negatives=8 | 0.4806 | 0.2919 | 0.7629 | 0.1793 | 0.3510 | 15.0823 |
-| Hybrid + inverse-popularity boost | alpha=0.15 | 0.4797 | 0.2916 | 0.7583 | 0.1823 | 0.3567 | 14.9803 |
+| Model | Recall@10 | NDCG@10 | HeadRecall@10 | TailRecall@10 | TailNDCG@10 | TailExposure@10 | AvgTrainPopularity@10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Two-Tower | 0.3634 | 0.2170 | 0.7006 | 0.0036 | 0.0011 | 0.0192 | 22.7156 |
+| Popularity | 0.3832 | 0.2301 | 0.7420 | 0.0002 | 0.0000 | 0.0006 | 23.3183 |
+| Mini-DLRM | 0.4138 | 0.2425 | 0.6660 | 0.1448 | 0.0616 | 0.3943 | 14.3137 |
+| Hybrid Mini-DLRM + Semantic | 0.4657 | 0.2810 | 0.7457 | 0.1669 | 0.0703 | 0.3488 | 14.9235 |
+| Hybrid + inverse-popularity boost alpha=0.15 | 0.4653 | 0.2806 | 0.7419 | 0.1701 | 0.0717 | 0.3550 | 14.8150 |
 
-The best overall configuration remains compact: `sentence-transformers/all-MiniLM-L6-v2`, `epochs=4`, `lr=1e-3`, `emb_dim=32`, and `train_negatives=8`. The inverse-popularity cold-start boost slightly increases tail exposure and tail relevance while slightly reducing head Recall and overall NDCG, which is the expected exploration-exploitation tradeoff.
+The model hierarchy is now clean: `Two-Tower < Popularity < Mini-DLRM < Hybrid Mini-DLRM + Semantic`. The semantic Hybrid is the strongest overall model on the 138k-scale benchmark. Popularity is competitive on overall metrics because it captures head demand, but it almost completely fails on tail items: TailRecall@10 is near zero, TailExposure@10 is near zero, and AvgTrainPopularity@10 is highest.
 
-Earlier tuned sampled-ranking benchmark on the smaller sparse subset:
+Current recommended configuration:
+
+```text
+Hybrid Mini-DLRM + Semantic
+semantic encoder = sentence-transformers/all-MiniLM-L6-v2
+epochs = 4
+lr = 1e-3
+emb_dim = 32
+train_negatives = 8
+eval_negatives = 99
+optional exploration boost = inverse_popularity, alpha = 0.15
+```
+
+The inverse-popularity boost is optional and should be interpreted as an exploration analysis, not a new model. It slightly improves tail relevance and exposure while slightly reducing head Recall and overall NDCG.
+
+Earlier exploratory benchmark on the smaller sparse subset:
 
 | Model | Setting | Recall@10 | HitRate@10 | NDCG@10 |
 |---|---|---:|---:|---:|
@@ -36,19 +54,9 @@ Earlier tuned sampled-ranking benchmark on the smaller sparse subset:
 | Hybrid MiniLM | epochs=5, emb_dim=32, negatives=12 | 0.2596 | 0.2596 | 0.1440 |
 | Hybrid BGE | epochs=8, emb_dim=64, negatives=12 | ~0.275 | ~0.275 | ~0.137 |
 
-Hybrid MiniLM is the best balanced/stable configuration. Hybrid BGE achieves the strongest observed Recall@10 after encoder-specific tuning. Mini-DLRM also improves substantially with stronger negative sampling, showing that optimization quality matters. Because leave-last-out evaluation has one positive test item per user, HitRate@10 and Recall@10 are effectively identical in this setup.
+These earlier results are useful historical context, not the current main benchmark. The BGE result came from an earlier subset and should not be read as the final best model. Because leave-last-out evaluation has one positive test item per user, HitRate@10 and Recall@10 are effectively identical in this setup.
 
 These results are from sampled candidate ranking, not full-catalog retrieval.
-
-Current recommended configuration from tuning:
-
-```text
-Hybrid Mini-DLRM + Semantic
-epochs = 5
-lr = 1e-3
-emb_dim = 32
-train_negatives = 12
-```
 
 ## Project Highlights
 
@@ -177,12 +185,17 @@ The multi-seed ablation showed that semantic priors improved both mean Recall@10
 
 The project was later scaled to a larger `Movies_and_TV` subset with 13,509 users, 20,896 items, 138,919 positive interactions, and 0.99951 sparsity. This setting is more representative than the earlier ~49k-interaction subset because the item universe is larger, the matrix is sparser, and tail-item ranking is a more prominent part of the sampled-candidate task.
 
-The main 3-seed setting used `sentence-transformers/all-MiniLM-L6-v2`, Hybrid Mini-DLRM + Semantic, `epochs=4`, `lr=1e-3`, `emb_dim=32`, and `train_negatives=8`. Evaluation remains sampled ranking with one held-out positive and 99 sampled negatives per user.
+The main 3-seed setting used `epochs=4`, `lr=1e-3`, `emb_dim=32`, and `train_negatives=8`. The Hybrid model used `sentence-transformers/all-MiniLM-L6-v2`; the boosted row applies an inverse-popularity post-ranking adjustment with `alpha=0.15`. Evaluation remains sampled ranking with one held-out positive and 99 sampled negatives per user.
 
-| Model | Recall@10 mean | NDCG@10 mean | HeadRecall@10 mean | HeadNDCG@10 mean | TailRecall@10 mean | TailNDCG@10 mean | TailExposure@10 mean | AvgTrainPopularity@10 mean |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Base Hybrid | 0.480606 | 0.291890 | 0.762905 | 0.494993 | 0.179342 | 0.075144 | 0.350981 | 15.082338 |
-| Hybrid + inverse-popularity boost, alpha=0.15 | 0.479680 | 0.291556 | 0.758317 | 0.492750 | 0.182326 | 0.076847 | 0.356670 | 14.980276 |
+| Model | Recall@10 | NDCG@10 | HeadRecall@10 | TailRecall@10 | TailNDCG@10 | TailExposure@10 | AvgTrainPopularity@10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Two-Tower | 0.363424 | 0.216993 | 0.700602 | 0.003596 | 0.001116 | 0.019172 | 22.715645 |
+| Popularity | 0.383152 | 0.230059 | 0.742042 | 0.000153 | 0.000046 | 0.000596 | 23.318332 |
+| Mini-DLRM | 0.413835 | 0.242458 | 0.665974 | 0.144759 | 0.061567 | 0.394333 | 14.313709 |
+| Hybrid Mini-DLRM + Semantic | 0.465727 | 0.280997 | 0.745698 | 0.166947 | 0.070298 | 0.348845 | 14.923451 |
+| Hybrid + inverse-popularity boost alpha=0.15 | 0.465282 | 0.280582 | 0.741898 | 0.170084 | 0.071741 | 0.355037 | 14.814953 |
+
+The hierarchy is now clear: Two-Tower < Popularity < Mini-DLRM < Hybrid Mini-DLRM + Semantic. Pure ID-based Two-Tower embeddings struggle in this sparse setting. Popularity is strong on head demand but almost completely misses tail positives. Mini-DLRM improves long-tail relevance through richer feature interactions. The semantic Hybrid improves both overall ranking and tail relevance relative to Mini-DLRM, showing that frozen MiniLM item-text embeddings provide useful priors when collaborative item signals are sparse.
 
 ### Tuning Observations
 
@@ -193,7 +206,7 @@ The main 3-seed setting used `sentence-transformers/all-MiniLM-L6-v2`, Hybrid Mi
 
 ### Interpretation
 
-The 138k-scale run strengthens the sparse long-tail conclusion: semantic hybrid ranking remains useful, but capacity and optimization settings matter. The inverse-popularity cold-start boost consistently shifts exposure toward tail items: `TailExposure@10` increases, `AvgTrainPopularity@10` decreases, and TailRecall/TailNDCG improve slightly. The tradeoff is small but real: HeadRecall and overall NDCG decrease slightly. This supports using smooth post-ranking exploration priors for long-tail visibility, while avoiding overclaiming relevance gains or production readiness.
+The 138k-scale run strengthens the sparse long-tail conclusion: semantic item priors are especially useful when many items have weak collaborative signals. Popularity-based ranking can look competitive overall because it captures head demand, but it remains extremely popularity-biased and does not solve long-tail recommendation. The inverse-popularity cold-start boost consistently shifts exposure toward tail items: `TailExposure@10` increases, `AvgTrainPopularity@10` decreases, and TailRecall/TailNDCG improve slightly. The tradeoff is small but real: HeadRecall and overall NDCG decrease slightly. This supports using smooth post-ranking exploration priors for long-tail visibility, while avoiding overclaiming relevance gains or production readiness.
 
 ## Hyperparameter Tuning Findings
 
@@ -219,7 +232,7 @@ Negative sampling tuning compared `train_negatives=8,12,16` with `epochs=5`, `lr
 | Hybrid Mini-DLRM + Semantic | 12 | 0.2596 | 0.0073 | 0.1440 | 0.0007 |
 | Hybrid Mini-DLRM + Semantic | 16 | 0.2604 | 0.0050 | 0.1429 | 0.0035 |
 
-Increasing negatives from 4 to 8/12/16 improves ranking quality. Hybrid remains more stable across seeds than Mini-DLRM, and `train_negatives=12` is the best balanced hybrid setting: strong Recall@10, best NDCG@10, and very low NDCG variance. At 16 negatives, Mini-DLRM nearly catches up in mean performance but still has much higher variance.
+On the earlier subset, increasing negatives from 4 to 8/12/16 improved ranking quality. Hybrid remained more stable across seeds than Mini-DLRM, and `train_negatives=12` was the best balanced hybrid setting in that regime. In the larger 138k-scale run, `train_negatives=8` worked better; increasing negatives to 12 or 16 appeared to hurt optimization.
 
 Final tuning takeaway: semantic embeddings improve sparse recommendation not only by raising mean ranking quality, but also by reducing seed sensitivity and stabilizing optimization under harder negative sampling.
 
@@ -272,32 +285,34 @@ The project progressed through five stages:
 
 1. Collaborative baselines: popularity, Two-Tower, and Mini-DLRM established the ranking baseline. On the initial tiny 47-item dense subset, Two-Tower and Mini-DLRM were similar, and semantic priors had little room to help.
 2. Sparse long-tail regime: expanding through the 2,215-item and 20,896-item subsets made tail-item behavior central. Hybrid semantic recommendation began outperforming purely collaborative models, and the larger 138k-interaction run produced more representative sparse-ranking behavior than the earlier ~49k subset.
-3. Negative sampling: increasing train negatives from 4 to 8/12/16 consistently improved ranking quality, especially NDCG. Semantic hybrid models remained more stable across seeds under harder negative sampling.
+3. Negative sampling: harder negative sampling improved ranking quality in the earlier subset, but the larger 138k-scale run showed a lower optimum around `train_negatives=8`; 12 or 16 negatives did not improve overall ranking in that sparse regime.
 4. Embedding capacity: tuning embedding dimensions from 16 to 96 exposed a capacity/stability tradeoff. Larger dimensions increased capacity but could increase variance or over-parameterize sparse interactions.
-5. Semantic encoder comparison: MiniLM, BGE-small, and e5-small behaved differently. MiniLM was the strongest balanced/stable baseline, BGE-small achieved the strongest tuned Recall, and e5-small was weaker in this recommendation setting.
+5. Semantic encoder comparison: MiniLM, BGE-small, and e5-small behaved differently in earlier experiments. BGE-small was promising on a smaller subset after tuning, but MiniLM is the current main encoder for the 138k-scale benchmark.
 
 Compact final benchmark:
 
-| Model | Best observed setting | Recall@10 | HitRate@10 | NDCG@10 |
-|---|---|---:|---:|---:|
-| Popularity | sparse long-tail baseline | 0.2139 | 0.2139 | 0.1136 |
-| Two-Tower | sparse long-tail baseline | 0.1094 | 0.1094 | 0.0479 |
-| Mini-DLRM | tuned negatives=16 | 0.2592 | 0.2592 | 0.1445 |
-| Hybrid MiniLM | epochs=5, emb_dim=32, negatives=12 | 0.2596 | 0.2596 | 0.1440 |
-| Hybrid BGE | epochs=8, emb_dim=64, negatives=12 | ~0.275 | ~0.275 | ~0.137 |
+| Model | Setting | Recall@10 | NDCG@10 | HeadRecall@10 | TailRecall@10 |
+|---|---|---:|---:|---:|---:|
+| Two-Tower | 138k sparse baseline | 0.363424 | 0.216993 | 0.700602 | 0.003596 |
+| Popularity | 138k sparse baseline | 0.383152 | 0.230059 | 0.742042 | 0.000153 |
+| Mini-DLRM | epochs=4, emb_dim=32, negatives=8 | 0.413835 | 0.242458 | 0.665974 | 0.144759 |
+| Hybrid MiniLM | epochs=4, emb_dim=32, negatives=8 | 0.465727 | 0.280997 | 0.745698 | 0.166947 |
+| Hybrid MiniLM + inverse-popularity boost | alpha=0.15 | 0.465282 | 0.280582 | 0.741898 | 0.170084 |
 
-Best balanced/stable configuration:
+Current recommended configuration:
 
 ```text
 Model: Hybrid Mini-DLRM + Semantic
 Semantic encoder: sentence-transformers/all-MiniLM-L6-v2
-epochs = 5
+epochs = 4
 lr = 1e-3
 emb_dim = 32
-train_negatives = 12
+train_negatives = 8
+eval_negatives = 99
+optional exploration boost = inverse_popularity, alpha = 0.15
 ```
 
-Best retrieval-oriented configuration:
+Earlier subset observation:
 
 ```text
 Model: Hybrid Mini-DLRM + Semantic
@@ -311,7 +326,7 @@ NDCG@10 mean ~= 0.137
 std ~= 0.012
 ```
 
-The main conclusion is that semantic item embeddings become increasingly valuable under sparse long-tail recommendation settings, but the benefit depends on capacity, negative sampling, and optimization budget. Smooth inverse-popularity boosting can slightly improve tail relevance and exposure, while slightly reducing head and overall metrics. The strongest general retrieval encoder is not automatically the best recommender semantic prior; alignment between semantic embedding geometry and recommender optimization matters.
+BGE-small was an earlier retrieval-oriented observation, not the final main result. The main conclusion is that semantic item embeddings become increasingly valuable under sparse long-tail recommendation settings, but the benefit depends on capacity, negative sampling, and optimization budget. Smooth inverse-popularity boosting can slightly improve tail relevance and exposure, while slightly reducing head and overall metrics. The strongest general retrieval encoder is not automatically the best recommender semantic prior; alignment between semantic embedding geometry and recommender optimization matters.
 
 ## Lessons Learned / Key Insights
 
