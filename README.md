@@ -42,6 +42,30 @@ Multi-positive evaluation is now the main protocol because it better reflects us
 
 The inverse-popularity boost remains optional and modest. Compared with the base Hybrid, Recall@10 is essentially unchanged, NDCG@10 drops slightly, TailRecall@10 improves from 0.175722 to 0.178243, TailNDCG@10 improves from 0.089091 to 0.090643, TailExposure@10 improves from 0.366850 to 0.372658, and AvgTrainPopularity@10 decreases from 9.187212 to 9.122362. This is best interpreted as a small exploration-exploitation tradeoff, not as a new model or production cold-start solution.
 
+## Hard Retrieval Stress Test: 3 Positives + 499 Negatives
+
+This is not the main benchmark. It is a robustness analysis with a much larger sampled candidate set: each eligible user ranks 3 held-out positive items against 499 sampled non-interacted negatives. Absolute scores are lower because the top-10 ranking task is substantially harder.
+
+| Setting | Value |
+|---|---:|
+| Eligible users | 4,899 |
+| Eligible items | 19,707 |
+| Positive interactions | 138,919 |
+| Sparsity | 0.998561 |
+| Eval protocol | 3 positives + 499 negatives |
+| NumHeadEvalUsers mean | 3,834 |
+| NumTailEvalUsers mean | 4,132 |
+| NumHeadEvalPositives mean | 6,843 |
+| NumTailEvalPositives mean | 7,854 |
+
+| Model | Recall@10 | HitRate@10 | NDCG@10 | HeadRecall@10 | HeadNDCG@10 | TailRecall@10 | TailHitRate@10 | TailNDCG@10 | TailExposure@10 | AvgTrainPopularity@10 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Mini-DLRM | 0.179084 | 0.414983 | 0.132253 | 0.369718 | 0.229910 | 0.007160 | 0.014037 | 0.003308 | 0.047714 | 18.452878 |
+| Hybrid Mini-DLRM + Semantic | 0.202626 | 0.461523 | 0.150502 | 0.389976 | 0.247414 | 0.031885 | 0.059656 | 0.016594 | 0.157726 | 14.273791 |
+| Hybrid + inverse-popularity boost alpha=0.15 | 0.202082 | 0.459992 | 0.149852 | 0.387585 | 0.245234 | 0.033196 | 0.061834 | 0.017449 | 0.165411 | 14.128322 |
+
+Hybrid remains stronger than Mini-DLRM under harder retrieval: Recall@10 improves from 0.179084 to 0.202626 and NDCG@10 improves from 0.132253 to 0.150502. The tail gap becomes especially clear: TailRecall@10 improves from 0.007160 to 0.031885 and TailNDCG@10 improves from 0.003308 to 0.016594. This suggests semantic item priors improve robustness as sampled retrieval difficulty increases. Mini-DLRM collapses more strongly on tail positives when the candidate set becomes larger. Hybrid + inverse-popularity boost slightly increases TailRecall, TailNDCG, and TailExposure, but the effect remains modest.
+
 ## Single-positive Compatibility Benchmark
 
 The earlier single-positive protocol is retained for standard benchmark compatibility, not as the main project result. It uses the original 13,509-user, 20,896-item filtered population with 1 held-out positive item plus 99 negatives per user. In this setting, `Recall@K` and `HitRate@K` are equivalent because there is only one positive item.
@@ -241,6 +265,7 @@ Long-tail diagnostics:
 6. Larger embedding dimensions can overfit; `emb_dim=32` is best overall in the final 138k multi-positive run.
 7. Negative sampling optimum is regime-dependent; `train_negatives=8` is best in the 138k run.
 8. Cold-start boosting is a modest exploration heuristic, not a replacement for relevance learning.
+9. Under the harder 499-negative stress test, the semantic Hybrid retains much stronger tail relevance than Mini-DLRM, suggesting better robustness as retrieval difficulty increases.
 
 ## Earlier Exploratory Results
 
@@ -291,6 +316,7 @@ Limitations:
 - The project does not separate retrieval and reranking stages.
 - Encoder-specific tuning was informative but not exhaustive.
 - The cold-start boost is a heuristic exposure analysis, not a production exploration system.
+- The 499-negative stress test is still sampled evaluation, not full-catalog retrieval.
 
 Future work:
 
