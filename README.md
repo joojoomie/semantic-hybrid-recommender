@@ -72,19 +72,51 @@ optional exploration boost: inverse_popularity alpha=0.15
 
 The boost is a post-ranking exploration heuristic, not a new model or production cold-start solution.
 
+## Final Benchmark Visualizations
+
+### Tail Relevance Metrics
+
+![Tail Metrics](results/figures/final_tail_metrics.png)
+
+Popularity and Two-Tower nearly fail on tail relevance. Hybrid substantially improves TailRecall and TailNDCG, showing that semantic item-text priors provide stronger tail generalization under sparse recommendation.
+
+### Head vs Tail Recall
+
+![Head Tail Recall](results/figures/final_head_tail_recall.png)
+
+This view makes the head-tail imbalance explicit. Mini-DLRM retains high tail exposure but weaker tail relevance, while Hybrid improves tail recall without collapsing head-item performance.
+
+### Overall Ranking Metrics
+
+![Overall Metrics](results/figures/final_overall_metrics.png)
+
+Hybrid achieves the best overall Recall@10 and NDCG@10. Mini-DLRM improves over simpler collaborative baselines, while Two-Tower performs worst in the sparse long-tail regime.
+
+### Exposure vs Popularity Tradeoff
+
+![Exposure Tradeoff](results/figures/final_exposure_tradeoff.png)
+
+Popularity is extremely head-biased. Hybrid + Boost shifts slightly toward better tail exposure, while Mini-DLRM produces high tail exposure but lower tail relevance. Hybrid balances relevance and exposure more effectively.
+
+The figures are generated from the fixed final benchmark metrics and saved as both PNG and PDF with:
+
+```bash
+python scripts/plot_final_results.py
+```
+
 ## Architecture
 
 ```text
-Amazon Reviews interactions          Product metadata text
-        |                                     |
-        v                                     v
- user_id, item_id                      title/category/description
-        |                                     |
-        v                                     v
- collaborative embeddings        frozen MiniLM/e5/BGE embeddings
-        |                                     |
-        |                          semantic projection layer
-        |                                     |
+Amazon Reviews interactions                           Product metadata text
+        |                                                        |
+        v                                                        v
+ user_id, item_id                                   title/category/description
+        |                                                        |
+        v                                                        v
+ collaborative embeddings                         frozen MiniLM/e5/BGE embeddings
+        |                                                        |
+        |                                            semantic projection layer
+        |                                                        |
         +----------- Mini-DLRM-style feature interaction --------+
                                       |
                                       v
